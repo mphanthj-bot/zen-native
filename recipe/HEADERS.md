@@ -18,6 +18,10 @@ Body responses: `{model, instructions: SYSTEM GỐC, input: [typed message],
 store: false, prompt_cache_key: <session ID>, include:
 ["reasoning.encrypted_content"], stream: true}`.
 
-Ràng buộc đã verify: system/instructions giữ nguyên byte gốc
-(`recipe/system.chat.txt`, `recipe/instructions.resp.txt`);
-`stream: true` bắt buộc; `max_tokens < 16` bị từ chối.
+Ràng buộc đã verify (audit MITM full 2 flows + bisect live có đối chứng):
+- system/instructions: cần GIỐNG prompt harness gốc — full text, +1 câu,
+  thậm chí nửa đầu đều pass. System ngắn/viết lại/lorem thì rớt.
+  File chuẩn: `recipe/system.chat.txt`, `recipe/instructions.resp.txt`.
+- session IDs: format bất kỳ đều được (không cần đúng regex).
+- tools và `prompt_cache_key`: binary gốc có lúc gửi lúc không — KHÔNG bắt buộc.
+- `stream: true` bắt buộc; `max_tokens < 16` bị từ chối.
