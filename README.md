@@ -58,19 +58,19 @@ MODELS.md        bảng benchmark + filter cost=0
 2. Giao với `models.dev` → giữ `cost.input == 0 and cost.output == 0`
    (`jev-1.13-free` giữ bằng rule tên — endpoint systemone riêng)
 
-## Benchmark 2026-10-02 (trực tiếp, native)
+## Benchmark 2026-10-02 (trực tiếp, native, chạy lại lần 2)
 
 | Model | KQ | Tổng | Byte đầu |
 |---|---|---|---|
-| big-pickle | 200 | 4.5s | 2.1s |
+| big-pickle | 200 | 1.0s | 0.1s |
 | fledge-alpha-free | 200 | 2.7s | 0.7s |
-| mimo-v2.5-free | 200 | 2.9s | 0.7s |
-| space-bunny-free | 200 | 1.0s | 0.5s |
-| mimo-v2.6-flash-free | 200 | 11.5s | 10.4s |
-| nemotron-3-ultra-free | 200 | 12s | 5.9s |
-| nemotron-3.5-lightning-free | 200 | 376s | 79s |
-| muse-spark-1.2-contributor-free (responses) | 200 | 13.8s | — |
-| muse-spark-1.3-contributor-free (responses) | 200 | 9.2s | — |
+| mimo-v2.5-free | 200 | 4.6s | 0.6s |
+| space-bunny-free | 200 | 1.3s | 0.1s |
+| mimo-v2.6-flash-free | 200 | 7.8s | 7.7s |
+| nemotron-3-ultra-free | 200 | 32s | 20.6s |
+| nemotron-3.5-lightning-free | 200 | 64.6s | 2.8s |
+| muse-spark-1.2-contributor-free (responses) | 200 | 8.9s | — |
+| muse-spark-1.3-contributor-free (responses) | 200 | 14.8s | — |
 | deepseek-v4-flash-free | 400 | sai shape, retry sau | — |
 | ling-3.0-flash-fin-free | 400 | sai shape, retry sau | — |
 | longcat-2.5-preview-free | 429 | rate-limit lúc test | — |
