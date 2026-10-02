@@ -4,7 +4,14 @@ Formula: Bearer public + opencode fingerprint headers + KNOWN harness
 system/instructions + free user content. Source IP pinned for clean bucket.
 Usage: python3 bench_zen_free.py [--only idx] [--list]
 """
-import http.client, ssl, json, secrets, uuid, time, sys
+import http.client, ssl, json, secrets, uuid, time, sys, os
+
+RECIPE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       '..', 'recipe')
+with open(os.path.join(RECIPE, 'system.chat.txt')) as f:
+    SYSTEM = f.read()
+with open(os.path.join(RECIPE, 'instructions.resp.txt')) as f:
+    INSTRUCTIONS = f.read()
 
 SRC = '2405:4802:1d13:e0::a17c'
 HOST = 'opencode.ai'
@@ -22,17 +29,6 @@ def base_headers():
         'User-Agent': 'opencode/latest/2.0.22/cli', 'x-opencode-client': 'cli',
         'x-opencode-project': uuid.uuid4().hex, 'x-opencode-session': sid,
         'x-opencode-session-id': sid, 'x-session-affinity': sid, 'x-session-id': sid}
-
-def load_flow(path, small=True):
-    from mitmproxy.io import FlowReader
-    from mitmproxy.http import HTTPFlow
-    with open(path, 'rb') as f:
-        for flow in FlowReader(f).stream():
-            if isinstance(flow, HTTPFlow) and flow.request.method == 'POST':
-                b = json.loads(flow.request.content)
-                if (len(flow.request.content) < 10000) == small:
-                    return b
-    raise RuntimeError('flow not found in ' + path)
 
 def post(path, body):
     conn = http.client.HTTPSConnection(HOST, 443, source_address=(SRC, 0),
@@ -85,19 +81,19 @@ def live_free_list():
     ids = sorted(m['id'] for m in data.get('data', []))
     return [i for i in ids if 'free' in i.lower() or i == 'big-pickle']
 
-def bench_chat(model, tpl):
+def bench_chat(model):
     body = {'model': model,
-        'messages': [{'role': 'system', 'content': tpl['messages'][0]['content']},
+        'messages': [{'role': 'system', 'content': SYSTEM},
                      {'role': 'user', 'content': PROMPT}],
         'stream': True, 'stream_options': {'include_usage': True}}
     st, total, first, text = post('/zen/v1/chat/completions', body)
     return st, total, first, parse_chat_sse(text)[:100]
 
-def bench_resp(model, tpl):
-    body = dict(tpl)
-    body['model'] = model
-    body['input'] = [{'role': 'user', 'content': PROMPT}]
-    body['stream'] = True
+def bench_resp(model):
+    body = {'model': model, 'instructions': INSTRUCTIONS,
+        'input': [{'role': 'user', 'content': PROMPT}], 'store': False,
+        'prompt_cache_key': 'ses_' + secrets.token_hex(13),
+        'include': ['reasoning.encrypted_content'], 'stream': True}
     st, total, first, text = post('/zen/v1/responses', body)
     return st, total, first, parse_resp_sse(text)[:100]
 
@@ -111,8 +107,6 @@ def main():
     only = None
     if '--only' in sys.argv:
         only = sys.argv[sys.argv.index('--only') + 1]
-    chat_tpl = load_flow('/tmp/opencode/mitm/flows.bin', True)
-    resp_tpl = load_flow('/tmp/opencode/mitm/flows_resp.bin', True)
     jobs = [('chat', m) for m in CHAT_MODELS] + [('resp', m) for m in RESP_MODELS]
     if only:
         jobs = [j for j in jobs if only in j[1]]
@@ -121,8 +115,7 @@ def main():
     for i, (kind, m) in enumerate(jobs):
         try:
             fn = bench_chat if kind == 'chat' else bench_resp
-            tpl = chat_tpl if kind == 'chat' else resp_tpl
-            st, total, first, txt = fn(m, tpl)
+            st, total, first, txt = fn(m)
             line = f'[{i+1}/{len(jobs)}] {kind:4} {m:38} {st} {total:5.1f}s first:{first:4.1f}s reply:{txt[:60]!r}'
         except Exception as e:
             line = f'[{i+1}/{len(jobs)}] {kind:4} {m:38} ERR {str(e)[:80]}'
