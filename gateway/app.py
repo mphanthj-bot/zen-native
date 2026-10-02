@@ -24,6 +24,56 @@ SRC_IP = os.environ.get('ZEN_SRC_IP', '') or None
 ZEN = 'https://opencode.ai/zen/v1'
 HERE = os.path.dirname(os.path.abspath(__file__))
 
+# --- Auto xoay IP egress (mỗi request 1 IPv6 trong /64, chia quota) ---
+import itertools
+import subprocess
+import threading
+
+_pool = [None]
+_lock = threading.Lock()
+
+
+def _iface_prefix():
+    iface = os.environ.get('ZEN_V6_IFACE', 'enp3s0')
+    try:
+        out = subprocess.run(['ip', '-6', 'addr', 'show', 'dev', iface],
+                             capture_output=True, text=True, timeout=10).stdout
+        for line in out.splitlines():
+            line = line.strip()
+            if line.startswith('inet6 240') or line.startswith('inet6 2'):
+                return line.split()[1].split('/')[0].split(':')[:4]
+    except Exception:
+        pass
+    return None
+
+
+def _ensure_pool(n=4):
+    base = _iface_prefix()
+    if not base:
+        return
+    for i in range(n):
+        ip = ':'.join(base) + f'::a17{i}'
+        subprocess.run(['sudo', '-n', 'ip', '-6', 'addr', 'add', f'{ip}/64',
+                        'dev', os.environ.get('ZEN_V6_IFACE', 'enp3s0')],
+                       capture_output=True, timeout=15)
+        _pool.append(ip)
+    global _cycle
+    _cycle = itertools.cycle([x for x in _pool if x])
+
+
+_cycle = None
+try:
+    _ensure_pool(int(os.environ.get('ZEN_POOL', '4')))
+except Exception:
+    pass
+
+
+def _next_src():
+    if _cycle is None:
+        return SRC_IP
+    with _lock:
+        return next(_cycle)
+
 with open(os.path.join(HERE, '..', 'recipe', 'system.chat.txt')) as f:
     SYSTEM = f.read()
 with open(os.path.join(HERE, '..', 'recipe', 'instructions.resp.txt')) as f:
@@ -43,9 +93,10 @@ def zen_headers():
 
 def zen_conn():
     kw = {'timeout': 120, 'context': ssl.create_default_context()}
-    if SRC_IP:
+    src = _next_src()
+    if src:
         return http.client.HTTPSConnection('opencode.ai', 443,
-                                           source_address=(SRC_IP, 0), **kw)
+                                           source_address=(src, 0), **kw)
     return http.client.HTTPSConnection('opencode.ai', 443, **kw)
 
 
@@ -133,12 +184,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _chat(self, body):
         msgs = [m for m in body.get('messages', []) if m.get('role') != 'system']
-        return zen_post('/zen/v1/chat/completions', {
+        out = {
             'model': body.get('model', 'big-pickle'), 'messages': [
                 {'role': 'system', 'content': SYSTEM},
                 *({'role': m.get('role', 'user'),
                    'content': as_text(m.get('content'))} for m in msgs)],
-            'stream': True, 'stream_options': {'include_usage': True}})
+            'stream': True, 'stream_options': {'include_usage': True}}
+        # forward tool-use + sampling params nguyên vẹn (compat tuyệt đối)
+        for k in ('tools', 'tool_choice', 'temperature', 'top_p',
+                  'max_completion_tokens', 'max_tokens', 'reasoning_effort'):
+            if body.get(k) is not None:
+                out[k] = body[k]
+        return zen_post('/zen/v1/chat/completions', out)
 
     def _resp(self, body):
         raw = body.get('input', '')
@@ -147,11 +204,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             raw = [{'type': 'message', 'role': 'user',
                     'content': [{'type': 'input_text', 'text': text}]}]
         _, sid = zen_headers()
-        return zen_post('/zen/v1/responses', {
+        out = {
             'model': body.get('model', 'muse-spark-1.3-contributor-free'),
+            # BẮT BUỘC system gốc: instructions của client (codex/grok) gửi
+            # lên là rớt lane free (đã verify: FreeTierError). Trade-off:
+            # model chạy nhưng theo hành vi title-generator.
             'instructions': INSTRUCTIONS, 'input': raw, 'store': False,
             'prompt_cache_key': sid,
-            'include': ['reasoning.encrypted_content'], 'stream': True})
+            'include': ['reasoning.encrypted_content'], 'stream': True}
+        for k in ('tools', 'tool_choice', 'temperature', 'top_p',
+                  'max_output_tokens', 'reasoning'):
+            if body.get(k) is not None:
+                out[k] = body[k]
+        return zen_post('/zen/v1/responses', out)
 
 
 if __name__ == '__main__':
