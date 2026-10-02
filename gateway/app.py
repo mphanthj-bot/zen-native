@@ -213,10 +213,12 @@ EGRESS = EgressPool()
 
 def zen_request(path, body, models):
     """Thử từng model x từng egress. Trả (response, model, egress_key)."""
+    import time as _t
     last = OSError('no egress')
     for m in models[:4]:
         body['model'] = m
         for e in EGRESS.order():
+            t0 = _t.time()
             try:
                 if e['kind'] == 'socks':
                     r = zen_post(path, body, egress=('socks', e['addr']))
@@ -225,6 +227,8 @@ def zen_request(path, body, models):
             except Exception as ex:
                 last = ex
                 EGRESS.fail(e)
+                print(f'[{_t.strftime("%H:%M:%S")}] FAIL {m} via '
+                      f'{EGRESS.key(e)}: {str(ex)[:120]}', flush=True)
                 continue
             if r.status == 200:
                 return r, m, EGRESS.key(e)
@@ -232,9 +236,13 @@ def zen_request(path, body, models):
                 r.read()
                 EGRESS.fail(e)
                 last = OSError(f'{r.status} via {EGRESS.key(e)}')
+                print(f'[{_t.strftime("%H:%M:%S")}] RETRYABLE {r.status} '
+                      f'{m} via {EGRESS.key(e)}', flush=True)
                 continue
             r.read()
             last = OSError(f'{r.status} model {m}')
+            print(f'[{_t.strftime("%H:%M:%S")}] MODEL-FAIL {r.status} {m}',
+                  flush=True)
             break
     raise last
 
