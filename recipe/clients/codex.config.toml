@@ -1,14 +1,19 @@
-# Codex CLI native vào Zen (Responses protocol, không qua trung gian).
-# File: ~/.codex/config.toml  (merge đoạn này vào)
-model = "gpt-5.3-codex"
-model_provider = "zen"
+# Đã verify live 2026-10-02 với codex-cli 0.157.1.
+# Thêm vào ~/.codex/config.toml (giữ nguyên phần còn lại):
 
-[model_providers.zen]
-name = "OpenCode Zen"
-base_url = "https://opencode.ai/zen/v1/responses"
-# Zen dùng Bearer public cho lane free + fingerprint headers.
-# Codex tự gửi UA của nó; nếu free lane từ chối, thêm vào request
-# các header sau (xem recipe/HEADERS.md):
-#   Authorization: Bearer public
-#   x-opencode-client: cli
-env_key = "OPENCODE_ZEN_KEY"
+[model_providers.zen-native]
+name = "zen-native gateway"
+base_url = "http://127.0.0.1:8080/v1"
+env_key = "OPENCODE2API_KEY"
+wire_api = "responses"
+
+# Test không đổi default (thêm -c override):
+#   export OPENCODE2API_KEY="sk-local-..."
+#   codex exec --skip-git-repo-check \
+#     -c model_provider="zen-native" \
+#     -c model="muse-spark-1.3-contributor-free" "reply with exactly: ok"
+#
+# Lưu ý: codex báo "Model metadata not found, fallback" vì /v1/models
+# live thiếu context_window — vẫn chạy, chỉ có thể giảm tối ưu.
+# Model trả phí (gpt-5.x-codex, grok-build-0.1) cần Zen key + balance,
+# free lane chỉ ăn các model cost 0 (xem MODELS.md).

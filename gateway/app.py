@@ -90,7 +90,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._json(200, {'ok': True})
         if self.path == '/v1/models':
             try:
-                with urllib.request.urlopen(ZEN + '/v1/models', timeout=30) as r:
+                req = urllib.request.Request(
+                    ZEN + '/models',
+                    headers={'User-Agent': UA})
+                with urllib.request.urlopen(req, timeout=30) as r:
                     data = r.read()
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
