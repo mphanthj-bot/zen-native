@@ -23,8 +23,16 @@ def get(url, timeout=30):
 
 
 def free_models():
-    # jev-1.13-free cố tình loại: endpoint systemone riêng, grok/chat không ăn.
-    BLOCKED = {'jev-1.13-free'}
+    # Nguồn chuẩn: binary opencode (/api/model), không phải docs/live đoán.
+    import subprocess
+    d = json.loads(subprocess.run(['opencode', 'api', 'get', '/api/model'],
+                    capture_output=True, timeout=60).stdout)
+    data = d.get('data', d if isinstance(d, list) else [])
+    return {m.get('modelID', m.get('id')): {
+        'limit': m.get('limit') or {},
+        'api': ('responses' if m.get('modelID', m.get('id'))
+                in RESP else 'chat')} for m in data
+        if m.get('providerID') == 'opencode'}
     live = {m['id'] for m in get('https://opencode.ai/zen/v1/models').get('data', [])}
     dev = get('https://models.dev/api.json')['opencode']['models']
     out = {}

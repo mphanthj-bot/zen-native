@@ -73,7 +73,16 @@ def parse_resp_sse(text):
                 pass
     return ''.join(out)
 
-def live_free_list():
+def binary_free_list():
+    import subprocess
+    d = json.loads(subprocess.run(['opencode', 'api', 'get', '/api/model'],
+                    capture_output=True, timeout=60).stdout)
+    data = d.get('data', d if isinstance(d, list) else [])
+    return sorted(m.get('modelID', m.get('id')) for m in data
+                  if m.get('providerID') == 'opencode')
+
+def live_free_list():  # vivo: quét zen trực tiếp (bao gồm model UI ẩn)
+
     conn = http.client.HTTPSConnection(HOST, 443, source_address=(SRC, 0),
         timeout=30, context=ssl.create_default_context())
     conn.request('GET', '/zen/v1/models')
@@ -99,7 +108,7 @@ def bench_resp(model):
 
 def main():
     if '--list' in sys.argv:
-        ids = live_free_list()
+        ids = binary_free_list() if '--live' not in sys.argv else live_free_list()
         print(f'LIVE FREE COUNT: {len(ids)}')
         for i in ids:
             print(' ', i)
