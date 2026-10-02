@@ -23,10 +23,12 @@ def get(url, timeout=30):
 
 
 def free_models():
+    # jev-1.13-free cố tình loại: endpoint systemone riêng, grok/chat không ăn.
+    BLOCKED = {'jev-1.13-free'}
     live = {m['id'] for m in get('https://opencode.ai/zen/v1/models').get('data', [])}
     dev = get('https://models.dev/api.json')['opencode']['models']
     out = {}
-    for mid in sorted(live):
+    for mid in sorted(live - BLOCKED):
         m = dev.get(mid)
         if m and (m.get('cost') or {}).get('input', 1) == 0 \
                 and (m.get('cost') or {}).get('output', 1) == 0:

@@ -18,8 +18,8 @@ x-opencode-session / -session-id / x-session-affinity / x-session-id: ses_<rando
 - Chat models → `POST /chat/completions`,
   body `{model, messages: [system GỐC + user tự do], stream: true,
   stream_options: {include_usage: true}}`
-- Responses models (`muse-spark-*-contributor-free`, `grok-build-0.1`,
-  `gpt-5.x-codex`) → `POST /responses`,
+- Responses models free: `muse-spark-*-contributor-free` (các model trả phí
+  cùng endpoint: `grok-build-0.1`, `gpt-5.x-codex` — cần Zen key + balance),
   body `{model, instructions: SYSTEM GỐC, input: [...typed...], store: false,
   prompt_cache_key: <session ID>, include: ["reasoning.encrypted_content"],
   stream: true}`

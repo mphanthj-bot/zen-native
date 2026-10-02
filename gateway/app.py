@@ -164,7 +164,8 @@ MODEL_FAIL = {400, 401, 404}
 COOLDOWN = int(os.environ.get('ZEN_COOLDOWN', '180'))
 
 CHAT_FREE = [m for m in (os.environ.get('ZEN_CHAT_ORDER') or
-             'space-bunny-free,fledge-alpha-free,big-pickle,mimo-v2.5-free,'
+             'space-bunny-free,fledge-alpha-free,big-pickle,'
+             'deepseek-v4-flash-free,mimo-v2.5-free,'
              'mimo-v2.6-flash-free,longcat-2.5-preview-free,'
              'ling-3.0-flash-fin-free,nemotron-3-ultra-free,'
              'nemotron-3.5-lightning-free').split(',') if m]
