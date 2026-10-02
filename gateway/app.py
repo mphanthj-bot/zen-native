@@ -23,6 +23,29 @@ GW_KEY = os.environ.get('ZEN_GW_KEY', '')
 SRC_IP = os.environ.get('ZEN_SRC_IP', '') or None
 ZEN = 'https://opencode.ai/zen/v1'
 HERE = os.path.dirname(os.path.abspath(__file__))
+SOCKS = os.environ.get('ZEN_SOCKS', '127.0.0.1:40000')  # '' = tắt fallback
+
+
+def _socks_conn():
+    """HTTPSConnection đi qua SOCKS5 (stdlib thuần, không dep)."""
+    import socket as _so
+    host, port = SOCKS.rsplit(':', 1)
+    raw = _so.create_connection((host, int(port)), timeout=30)
+    raw.sendall(b'\x05\x01\x00')
+    if raw.recv(2) != b'\x05\x00':
+        raise OSError('socks5 hello rejected')
+    req = b'\x05\x01\x00\x03' + bytes([len('opencode.ai')]) + b'opencode.ai' \
+        + (443).to_bytes(2, 'big')
+    raw.sendall(req)
+    resp = raw.recv(10)
+    if len(resp) < 2 or resp[1] != 0x00:
+        raise OSError(f'socks5 connect failed: {resp.hex()}')
+    ctx = ssl.create_default_context()
+    tls = ctx.wrap_socket(raw, server_hostname='opencode.ai')
+    conn = http.client.HTTPSConnection('opencode.ai', 443, timeout=120)
+    conn.sock = tls
+    conn._http_vsn, conn._http_vsn_str = (1, 1), 'HTTP/1.1'
+    return conn
 
 # --- Auto xoay IP egress (mỗi request 1 IPv6 trong /64, chia quota) ---
 import itertools
@@ -100,11 +123,32 @@ def zen_conn():
     return http.client.HTTPSConnection('opencode.ai', 443, **kw)
 
 
-def zen_post(path, body):
+def zen_post(path, body, via=None):
     headers, _ = zen_headers()
-    conn = zen_conn()
-    conn.request('POST', path, body=json.dumps(body).encode(), headers=headers)
+    data = json.dumps(body).encode()
+    if via == 'socks':
+        conn = _socks_conn()
+    else:
+        conn = zen_conn()
+    conn.request('POST', path, body=data, headers=headers)
     return conn.getresponse()
+
+
+RETRYABLE = {403, 429, 502, 503}
+
+
+def zen_post_fallback(path, body):
+    """Direct trước, fail retryable thì đổi đường WARP SOCKS 1 lần."""
+    try:
+        r = zen_post(path, body)
+        if r.status not in RETRYABLE:
+            return r
+        first = r.status
+    except Exception:
+        first = 'ERR'
+    if not SOCKS:
+        raise OSError(f'direct failed ({first}), SOCKS fallback tắt')
+    return zen_post(path, body, via='socks')
 
 
 def as_text(content):
@@ -195,7 +239,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                   'max_completion_tokens', 'max_tokens', 'reasoning_effort'):
             if body.get(k) is not None:
                 out[k] = body[k]
-        return zen_post('/zen/v1/chat/completions', out)
+        return zen_post_fallback('/zen/v1/chat/completions', out)
 
     def _resp(self, body):
         raw = body.get('input', '')
@@ -216,7 +260,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                   'max_output_tokens', 'reasoning'):
             if body.get(k) is not None:
                 out[k] = body[k]
-        return zen_post('/zen/v1/responses', out)
+        return zen_post_fallback('/zen/v1/responses', out)
 
 
 if __name__ == '__main__':

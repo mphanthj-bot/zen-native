@@ -74,3 +74,12 @@ MODELS.md        bảng benchmark + filter cost=0
 | deepseek-v4-flash-free | 400 | sai shape, retry sau | — |
 | ling-3.0-flash-fin-free | 400 | sai shape, retry sau | — |
 | longcat-2.5-preview-free | 429 | rate-limit lúc test | — |
+
+## Vận hành egress (khi bị rate-limit)
+
+- Gateway tự xoay IPv6 pool mỗi request (`ZEN_POOL`, `ZEN_V6_IFACE`),
+  fail 403/429/502/503 thì đổi đường WARP SOCKS 1 lần (`ZEN_SOCKS`,
+  rỗng = tắt fallback).
+- WARP proxy mode: `warp-cli mode proxy` + `warp-cli proxy port 40000`
+  + `warp-cli connect`. Đổi identity mới: `warp-cli tunnel rotate-keys`.
+- Kiểm tra: `curl --socks5-hostname 127.0.0.1:40000 https://ifconfig.me`
