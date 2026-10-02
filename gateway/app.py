@@ -26,10 +26,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SOCKS = os.environ.get('ZEN_SOCKS', '127.0.0.1:40000')  # '' = tắt fallback
 
 
-def _socks_conn():
-    """HTTPSConnection đi qua SOCKS5 (stdlib thuần, không dep)."""
+def _socks_conn(addr=None):
+    """HTTPSConnection đi qua SOCKS5 addr (stdlib thuần, không dep)."""
     import socket as _so
-    host, port = SOCKS.rsplit(':', 1)
+    host, port = (addr or SOCKS).rsplit(':', 1)
     raw = _so.create_connection((host, int(port)), timeout=30)
     raw.sendall(b'\x05\x01\x00')
     if raw.recv(2) != b'\x05\x00':
@@ -114,41 +114,129 @@ def zen_headers():
             'x-session-id': sid, 'prompt_cache_key': sid}, sid
 
 
-def zen_conn():
+def zen_conn(src='__pool__'):
     kw = {'timeout': 120, 'context': ssl.create_default_context()}
-    src = _next_src()
+    if src == '__pool__':
+        src = _next_src()
     if src:
         return http.client.HTTPSConnection('opencode.ai', 443,
                                            source_address=(src, 0), **kw)
     return http.client.HTTPSConnection('opencode.ai', 443, **kw)
 
 
-def zen_post(path, body, via=None):
+def zen_post(path, body, egress=None):
+    """egress: None/direct-ip | ('socks', addr)."""
     headers, _ = zen_headers()
     data = json.dumps(body).encode()
-    if via == 'socks':
-        conn = _socks_conn()
+    if isinstance(egress, tuple):
+        conn = _socks_conn(egress[1])
     else:
-        conn = zen_conn()
+        conn = zen_conn(egress)
     conn.request('POST', path, body=data, headers=headers)
     return conn.getresponse()
 
 
+def _direct_ips():
+    """IPs direct hiện có: pool v6 + SRC_IP (nếu đặt)."""
+    ips = [x for x in _pool if x]
+    if SRC_IP and SRC_IP not in ips:
+        ips.append(SRC_IP)
+    return ips
+
+
 RETRYABLE = {403, 429, 502, 503}
+MODEL_FAIL = {400, 401, 404}
+COOLDOWN = int(os.environ.get('ZEN_COOLDOWN', '180'))
+
+CHAT_FREE = [m for m in (os.environ.get('ZEN_CHAT_ORDER') or
+             'space-bunny-free,fledge-alpha-free,big-pickle,mimo-v2.5-free,'
+             'mimo-v2.6-flash-free,longcat-2.5-preview-free,'
+             'ling-3.0-flash-fin-free,nemotron-3-ultra-free,'
+             'nemotron-3.5-lightning-free').split(',') if m]
+RESP_FREE = [m for m in (os.environ.get('ZEN_RESP_ORDER') or
+             'muse-spark-1.3-contributor-free,muse-spark-1.2-contributor-free'
+             ).split(',') if m]
+
+CODE_HINTS = ('def ', 'class ', 'import ', 'function', 'const ', '=>', 'error',
+              'traceback', 'bug', 'code', 'python', 'javascript', 'golang',
+              'fibonacci', 'def main', 'select ', 'SELECT')
 
 
-def zen_post_fallback(path, body):
-    """Direct trước, fail retryable thì đổi đường WARP SOCKS 1 lần."""
-    try:
-        r = zen_post(path, body)
-        if r.status not in RETRYABLE:
-            return r
-        first = r.status
-    except Exception:
-        first = 'ERR'
-    if not SOCKS:
-        raise OSError(f'direct failed ({first}), SOCKS fallback tắt')
-    return zen_post(path, body, via='socks')
+def pick_model(requested, text, resp_mode):
+    """AUTO (kiểu webchat) theo prompt + manual fallback chain."""
+    pool = list(RESP_FREE) if resp_mode else list(CHAT_FREE)
+    if requested and requested != 'auto':
+        return [requested] + [m for m in pool if m != requested]
+    t = (text or '').lower()
+    if resp_mode:
+        return pool
+    if len(text or '') > 60000:
+        first = 'space-bunny-free'
+    elif any(h in t for h in CODE_HINTS):
+        first = 'big-pickle'
+    else:
+        first = 'space-bunny-free'
+    return [first] + [m for m in pool if m != first]
+
+
+class EgressPool:
+    """Xoay egress + cooldown IP chết, tự hồi."""
+
+    def __init__(self):
+        self.cool = {}
+
+    def items(self):
+        out = [{'kind': 'direct', 'ip': ip} for ip in _direct_ips()]
+        for addr in [a.strip() for a in (SOCKS or '').split(',') if a.strip()]:
+            out.append({'kind': 'socks', 'addr': addr})
+        return out or [{'kind': 'direct', 'ip': None}]
+
+    def key(self, e):
+        return e.get('ip') or e.get('addr') or 'direct'
+
+    def order(self):
+        import time as _t
+        now = _t.time()
+        items = self.items()
+        live = [e for e in items if self.cool.get(self.key(e), 0) <= now]
+        if live:
+            return live
+        return sorted(items, key=lambda e: self.cool.get(self.key(e), 0))
+
+    def fail(self, e):
+        import time as _t
+        self.cool[self.key(e)] = _t.time() + COOLDOWN
+
+
+EGRESS = EgressPool()
+
+
+def zen_request(path, body, models):
+    """Thử từng model x từng egress. Trả (response, model, egress_key)."""
+    last = OSError('no egress')
+    for m in models[:4]:
+        body['model'] = m
+        for e in EGRESS.order():
+            try:
+                if e['kind'] == 'socks':
+                    r = zen_post(path, body, egress=('socks', e['addr']))
+                else:
+                    r = zen_post(path, body, egress=e['ip'])
+            except Exception as ex:
+                last = ex
+                EGRESS.fail(e)
+                continue
+            if r.status == 200:
+                return r, m, EGRESS.key(e)
+            if r.status in RETRYABLE:
+                r.read()
+                EGRESS.fail(e)
+                last = OSError(f'{r.status} via {EGRESS.key(e)}')
+                continue
+            r.read()
+            last = OSError(f'{r.status} model {m}')
+            break
+    raise last
 
 
 def as_text(content):
@@ -210,15 +298,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._json(400, {'error': 'bad json'})
         try:
             if self.path == '/v1/chat/completions':
-                upstream = self._chat(body)
+                upstream, model, ekey = self._chat(body)
             elif self.path == '/v1/responses':
-                upstream = self._resp(body)
+                upstream, model, ekey = self._resp(body)
             else:
                 return self._json(404, {'error': 'not found'})
         except Exception as e:
             return self._json(502, {'error': str(e)[:200]})
         self.send_response(upstream.status)
         self.send_header('Content-Type', 'application/json')
+        self.send_header('X-Zen-Model', model)
+        self.send_header('X-Zen-Egress', ekey)
         self.end_headers()
         while True:
             chunk = upstream.read(65536)
@@ -228,8 +318,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _chat(self, body):
         msgs = [m for m in body.get('messages', []) if m.get('role') != 'system']
+        text = ' '.join(as_text(m.get('content')) for m in msgs)
         out = {
-            'model': body.get('model', 'big-pickle'), 'messages': [
+            'messages': [
                 {'role': 'system', 'content': SYSTEM},
                 *({'role': m.get('role', 'user'),
                    'content': as_text(m.get('content'))} for m in msgs)],
@@ -239,7 +330,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                   'max_completion_tokens', 'max_tokens', 'reasoning_effort'):
             if body.get(k) is not None:
                 out[k] = body[k]
-        return zen_post_fallback('/zen/v1/chat/completions', out)
+        models = pick_model(body.get('model', 'auto'), text, False)
+        return zen_request('/zen/v1/chat/completions', out, models)
 
     def _resp(self, body):
         raw = body.get('input', '')
@@ -249,7 +341,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     'content': [{'type': 'input_text', 'text': text}]}]
         _, sid = zen_headers()
         out = {
-            'model': body.get('model', 'muse-spark-1.3-contributor-free'),
             # BẮT BUỘC system gốc: instructions của client (codex/grok) gửi
             # lên là rớt lane free (đã verify: FreeTierError). Trade-off:
             # model chạy nhưng theo hành vi title-generator.
@@ -260,7 +351,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                   'max_output_tokens', 'reasoning'):
             if body.get(k) is not None:
                 out[k] = body[k]
-        return zen_post_fallback('/zen/v1/responses', out)
+        models = pick_model(body.get('model', 'auto'), text, True)
+        return zen_request('/zen/v1/responses', out, models)
 
 
 if __name__ == '__main__':

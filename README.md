@@ -83,3 +83,14 @@ MODELS.md        bảng benchmark + filter cost=0
 - WARP proxy mode: `warp-cli mode proxy` + `warp-cli proxy port 40000`
   + `warp-cli connect`. Đổi identity mới: `warp-cli tunnel rotate-keys`.
 - Kiểm tra: `curl --socks5-hostname 127.0.0.1:40000 https://ifconfig.me`
+
+## Chế độ AUTO + fallback (kiểu webchat)
+
+- `"model": "auto"` → gateway đọc prompt: có từ khóa code → `big-pickle`,
+  prompt dài >60K ký tự → `space-bunny-free` (context 1M), còn lại
+  `space-bunny-free` (nhanh nhất bench). Responses auto → `muse-spark-1.3`.
+- Model chỉ định chết (400/401/404) → tự rơi sang con free tiếp theo.
+- Egress chết (403/429/502/503) → cooldown `ZEN_COOLDOWN` giây (mặc định
+  180) rồi tự hồi, request đổi đường khác.
+- Response kèm header `X-Zen-Model` + `X-Zen-Egress` để biết đi đường nào.
+- Đổi thứ tự: `ZEN_CHAT_ORDER`, `ZEN_RESP_ORDER` (phân tách dấu phẩy).
