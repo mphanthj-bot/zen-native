@@ -71,15 +71,30 @@ def _iface_prefix():
 
 
 def _ensure_pool(n=4):
+    import re
     base = _iface_prefix()
     if not base:
         return
+    prefix = ':'.join(base) + '::'
+    # gom cả IPs pool đã có sẵn trên interface (sống qua restart).
+    # chỉ lấy họ a17* (pool xoay), không đụng IP chính của máy.
+    try:
+        out = subprocess.run(['ip', '-6', 'addr', 'show', 'dev',
+                              os.environ.get('ZEN_V6_IFACE', 'enp3s0')],
+                             capture_output=True, text=True,
+                             timeout=10).stdout
+        for m in re.findall(r'inet6\s+([0-9a-f:]+)/64', out):
+            if m.startswith(prefix + 'a17') and m not in _pool:
+                _pool.append(m)
+    except Exception:
+        pass
     for i in range(n):
-        ip = ':'.join(base) + f'::a17{i}'
+        ip = prefix + f'a17{i}'
         subprocess.run(['sudo', '-n', 'ip', '-6', 'addr', 'add', f'{ip}/64',
                         'dev', os.environ.get('ZEN_V6_IFACE', 'enp3s0')],
                        capture_output=True, timeout=15)
-        _pool.append(ip)
+        if ip not in _pool:
+            _pool.append(ip)
     global _cycle
     _cycle = itertools.cycle([x for x in _pool if x])
 
